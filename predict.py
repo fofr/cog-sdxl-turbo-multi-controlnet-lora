@@ -8,6 +8,8 @@ from cog import BasePredictor, Input, Path
 from diffusers import (
     DDIMScheduler,
     DiffusionPipeline,
+    AutoPipelineForText2Image,
+    AutoPipelineForImage2Image,
     DPMSolverMultistepScheduler,
     EulerAncestralDiscreteScheduler,
     EulerDiscreteScheduler,
@@ -63,7 +65,8 @@ class Predictor(BasePredictor):
 
     def build_controlnet_pipeline(self, pipeline_class, controlnet_models):
         pipe = pipeline_class.from_pretrained(
-            SDXL_MODEL_CACHE,
+            "stabilityai/sdxl-turbo",
+            cache_dir=SDXL_MODEL_CACHE,
             torch_dtype=torch.float16,
             use_safetensors=True,
             variant="fp16",
@@ -103,7 +106,7 @@ class Predictor(BasePredictor):
         WeightsDownloader.download_if_not_exists(SDXL_URL, SDXL_MODEL_CACHE)
 
         print("Loading sdxl txt2img pipeline...")
-        self.txt2img_pipe = DiffusionPipeline.from_pretrained(
+        self.txt2img_pipe = AutoPipelineForText2Image.from_pretrained(
             "stabilityai/sdxl-turbo",
             cache_dir=SDXL_MODEL_CACHE,
             torch_dtype=torch.float16,
@@ -117,7 +120,9 @@ class Predictor(BasePredictor):
         self.txt2img_pipe.to("cuda")
 
         print("Loading SDXL img2img pipeline...")
-        self.img2img_pipe = StableDiffusionXLImg2ImgPipeline(
+        self.img2img_pipe = AutoPipelineForImage2Image.from_pretrained(
+            "stabilityai/sdxl-turbo",
+            cache_dir=SDXL_MODEL_CACHE,
             vae=self.txt2img_pipe.vae,
             text_encoder=self.txt2img_pipe.text_encoder,
             text_encoder_2=self.txt2img_pipe.text_encoder_2,
@@ -181,10 +186,6 @@ class Predictor(BasePredictor):
             description="Input prompt",
             default="An astronaut riding a rainbow unicorn",
         ),
-        negative_prompt: str = Input(
-            description="Negative Prompt",
-            default="",
-        ),
         agree_to_research_only: bool = Input(
             description="You must agree to use this model only for research. It is not for commercial use.",
             default=False,
@@ -230,9 +231,6 @@ class Predictor(BasePredictor):
         ),
         num_inference_steps: int = Input(
             description="Number of denoising steps", ge=1, le=100, default=1
-        ),
-        guidance_scale: float = Input(
-            description="Scale for classifier-free guidance", ge=0, le=50, default=0.0
         ),
         prompt_strength: float = Input(
             description="Prompt strength when using img2img / inpaint. 1.0 corresponds to full destruction of information in image",
@@ -358,6 +356,12 @@ class Predictor(BasePredictor):
                 "You must agree to use this model for research-only, you cannot use this model comercially."
             )
 
+        if image and (num_inference_steps * prompt_strength < 1.0):
+            num_inference_steps = int(np.ceil(1.0 / prompt_strength))
+            print(
+                "Warning: When using SDXL-Turbo for image-to-image generation, num_inference_steps * prompt_strength should be >= 1. "
+                f"Setting num_inference_steps to {num_inference_steps}."
+            )
 
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
@@ -486,6 +490,9 @@ class Predictor(BasePredictor):
         elif img2img:
             sdxl_kwargs["image"] = image
             sdxl_kwargs["strength"] = prompt_strength
+        else:
+            sdxl_kwargs["width"] = width
+            sdxl_kwargs["height"] = height
 
         if refine == "base_image_refiner":
             sdxl_kwargs["output_type"] = "latent"
@@ -500,11 +507,8 @@ class Predictor(BasePredictor):
         generator = torch.Generator("cuda").manual_seed(seed)
 
         common_args = {
-            "width": width,
-            "height": height,
             "prompt": [prompt] * num_outputs,
-            "negative_prompt": [negative_prompt] * num_outputs,
-            "guidance_scale": guidance_scale,
+            "guidance_scale": 0.0,
             "generator": generator,
             "num_inference_steps": num_inference_steps,
         }
