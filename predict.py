@@ -6,16 +6,9 @@ import numpy as np
 import torch
 from cog import BasePredictor, Input, Path
 from diffusers import (
-    DDIMScheduler,
     DiffusionPipeline,
     AutoPipelineForText2Image,
     AutoPipelineForImage2Image,
-    DPMSolverMultistepScheduler,
-    EulerAncestralDiscreteScheduler,
-    EulerDiscreteScheduler,
-    HeunDiscreteScheduler,
-    PNDMScheduler,
-    StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLInpaintPipeline,
     StableDiffusionXLControlNetPipeline,
     StableDiffusionXLControlNetInpaintPipeline,
@@ -41,23 +34,6 @@ REFINER_URL = (
     "https://weights.replicate.delivery/default/sdxl/refiner-no-vae-no-encoder-1.0.tar"
 )
 SAFETY_URL = "https://weights.replicate.delivery/default/sdxl/safety-1.0.tar"
-
-
-class KarrasDPM:
-    def from_config(config):
-        return DPMSolverMultistepScheduler.from_config(config, use_karras_sigmas=True)
-
-
-SCHEDULERS = {
-    "DDIM": DDIMScheduler,
-    "DPMSolverMultistep": DPMSolverMultistepScheduler,
-    "HeunDiscrete": HeunDiscreteScheduler,
-    "KarrasDPM": KarrasDPM,
-    "K_EULER_ANCESTRAL": EulerAncestralDiscreteScheduler,
-    "K_EULER": EulerDiscreteScheduler,
-    "PNDM": PNDMScheduler,
-}
-
 
 class Predictor(BasePredictor):
     def load_trained_weights(self, weights, pipe):
@@ -166,6 +142,8 @@ class Predictor(BasePredictor):
 
         self.controlnet = ControlNet(self)
 
+        self.txt2img_pipe(prompt="warmup", num_inference_steps=4)
+
         print("setup took: ", time.time() - start)
 
     def run_safety_checker(self, image):
@@ -223,11 +201,6 @@ class Predictor(BasePredictor):
             ge=1,
             le=4,
             default=1,
-        ),
-        scheduler: str = Input(
-            description="scheduler",
-            choices=SCHEDULERS.keys(),
-            default="K_EULER",
         ),
         num_inference_steps: int = Input(
             description="Number of denoising steps", ge=1, le=100, default=1
@@ -350,6 +323,8 @@ class Predictor(BasePredictor):
             default=1.0,
         ),
     ) -> List[Path]:
+        start = time.time()
+
         """Run a single prediction on the model."""
         if not agree_to_research_only:
             raise Exception(
@@ -503,7 +478,6 @@ class Predictor(BasePredictor):
             pipe.watermark = None
             self.refiner.watermark = None
 
-        pipe.scheduler = SCHEDULERS[scheduler].from_config(pipe.scheduler.config)
         generator = torch.Generator("cuda").manual_seed(seed)
 
         common_args = {
@@ -516,9 +490,12 @@ class Predictor(BasePredictor):
         if self.is_lora:
             sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
 
+        inference_start = time.time()
         output = pipe(**common_args, **sdxl_kwargs, **controlnet_args)
+        print(f"Inference took: {time.time() - inference_start}")
 
         if refine == "base_image_refiner":
+            refiner_start = time.time()
             refiner_kwargs = {
                 "image": output.images,
             }
@@ -531,6 +508,7 @@ class Predictor(BasePredictor):
                 common_args_without_dimensions["num_inference_steps"] = refine_steps
 
             output = self.refiner(**common_args_without_dimensions, **refiner_kwargs)
+            print(f"Refiner took: {time.time() - refiner_start}")
 
         if not apply_watermark:
             pipe.watermark = watermark_cache
@@ -561,4 +539,5 @@ class Predictor(BasePredictor):
                 "NSFW content detected. Try running it again, or try a different prompt."
             )
 
+        print(f"Prediction took: {time.time() - start}")
         return output_paths
