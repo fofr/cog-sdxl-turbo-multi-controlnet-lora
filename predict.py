@@ -521,7 +521,7 @@ class Predictor(BasePredictor):
 
         if controlnet:
             for i, image in enumerate(control_images):
-                output_path = f"/tmp/control-{i}.png"
+                output_path = f"/tmp/control-{i}.jpg"
                 image.save(output_path)
                 output_paths.append(Path(output_path))
 
@@ -530,7 +530,7 @@ class Predictor(BasePredictor):
                 if has_nsfw_content[i]:
                     print(f"NSFW content detected in image {i}")
                     continue
-            output_path = f"/tmp/out-{i}.png"
+            output_path = f"/tmp/out-{i}.jpg"
             image.save(output_path)
             output_paths.append(Path(output_path))
 
