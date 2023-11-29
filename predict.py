@@ -34,7 +34,7 @@ SDXL_MODEL_CACHE = "./sdxl-cache"
 REFINER_MODEL_CACHE = "./refiner-cache"
 SAFETY_CACHE = "./safety-cache"
 FEATURE_EXTRACTOR = "./feature-extractor"
-SDXL_URL = "https://weights.replicate.delivery/default/sdxl/sdxl-vae-upcast-fix.tar"
+SDXL_URL = "https://weights.replicate.delivery/default/sdxl-turbo/sd_xl_turbo_fp16.tar"
 REFINER_URL = (
     "https://weights.replicate.delivery/default/sdxl/refiner-no-vae-no-encoder-1.0.tar"
 )
@@ -104,7 +104,8 @@ class Predictor(BasePredictor):
 
         print("Loading sdxl txt2img pipeline...")
         self.txt2img_pipe = DiffusionPipeline.from_pretrained(
-            SDXL_MODEL_CACHE,
+            "stabilityai/sdxl-turbo",
+            cache_dir=SDXL_MODEL_CACHE,
             torch_dtype=torch.float16,
             use_safetensors=True,
             variant="fp16",
@@ -184,6 +185,10 @@ class Predictor(BasePredictor):
             description="Negative Prompt",
             default="",
         ),
+        agree_to_research_only: bool = Input(
+            description="You must agree to use this model only for research. It is not for commercial use.",
+            default=False,
+        ),
         image: Path = Input(
             description="Input image for img2img or inpaint mode",
             default=None,
@@ -194,11 +199,11 @@ class Predictor(BasePredictor):
         ),
         width: int = Input(
             description="Width of output image",
-            default=768,
+            default=512,
         ),
         height: int = Input(
             description="Height of output image",
-            default=768,
+            default=512,
         ),
         sizing_strategy: str = Input(
             description="Decide how to resize images – use width/height, resize based on input image or control image",
@@ -224,10 +229,10 @@ class Predictor(BasePredictor):
             default="K_EULER",
         ),
         num_inference_steps: int = Input(
-            description="Number of denoising steps", ge=1, le=500, default=30
+            description="Number of denoising steps", ge=1, le=100, default=1
         ),
         guidance_scale: float = Input(
-            description="Scale for classifier-free guidance", ge=1, le=50, default=7.5
+            description="Scale for classifier-free guidance", ge=0, le=50, default=0.0
         ),
         prompt_strength: float = Input(
             description="Prompt strength when using img2img / inpaint. 1.0 corresponds to full destruction of information in image",
@@ -348,6 +353,12 @@ class Predictor(BasePredictor):
         ),
     ) -> List[Path]:
         """Run a single prediction on the model."""
+        if not agree_to_research_only:
+            raise Exception(
+                "You must agree to use this model for research-only, you cannot use this model comercially."
+            )
+
+
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
         print(f"Using seed: {seed}")
